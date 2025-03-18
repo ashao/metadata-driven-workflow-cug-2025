@@ -1,0 +1,12 @@
+"Phillips experiment"
+1 1 1 0 0 0
+
+"training_data",     6,"hours",1,"days","Time",
+
+#This is the field section of the diag_table.
+
+
+"ocean_model","KE","KE","training_data","all","none","none",2
+"ocean_model","Rd_dx","Rd_dx","training_data","all","none","none",2
+"ocean_model","RV","RV","training_data","all","none","none",2
+"ocean_model","e","e","training_data","all","none","none",2

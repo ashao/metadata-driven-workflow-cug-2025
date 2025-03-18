@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+dependencies = [
+  "xarray[io]",
+  "xgcm",
+  "gcm_filters",
+  "scikit-learn",
+  "torch",
+  "smartsim",
+  "smartredis",
+  "cmf"
+]
+
+[project]
+name = "metadata-driven-workflow-cug-2025"
+version = "0.0.1"
+
+[tool.setuptools]
+packages = ["mdwc2025"]
+package-dir = { "mdwc2025" = "mdwc2025" }
+
+[project.optional-dependencies]
+dev = [
+  "black",
+  "isort"
+]
+
+[tool.black]
+line-length = 88
+target-version = ['py310']
+exclude = '''
+(
+  | \.egg
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.nox
+  | \.tox
+  | \.venv
+  | _build
+  | build
+  | dist
+  | setup.py
+  | .*\.py
+)
+'''

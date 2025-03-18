@@ -1,14 +1,35 @@
-import random
-
+from sklearn.cluster import KMeans
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import xarray as xr
+from torch.utils.data import Dataset, DataLoader, random_split
+import random
 import torch.optim.lr_scheduler as lr_scheduler
+from cmflib import cmf
 
-from mdwc2025 import EKE_Dataset
-from torch.utils.data import DataLoader, random_split
+
+metawriter = cmf.Cmf(
+   filename="CUG2024_mlmd",
+   pipeline_name="EKEResnet_SmallData",
+   graph=False
+)     
+
+
+context = metawriter.create_context(
+    pipeline_stage="Training",
+    custom_properties={
+        "name": "CUG_2024"
+    }
+)
+
+execution = metawriter.create_execution(
+    execution_type="Model_Training",
+    custom_properties = {
+        "dataset": "SimulatedData"
+    }
+)
 
 # Function to compute C dynamically based on the smallest nonzero absolute value in RV_vert_avg
 def compute_C(file_path):
@@ -17,6 +38,83 @@ def compute_C(file_path):
     nonzero_values = np.abs(rv_vert_avg[rv_vert_avg != 0])
     C = np.min(nonzero_values) if len(nonzero_values) > 0 else 1.0  # Avoid zero
     return np.log(C + 1)
+
+# Symmetric Log Transformation
+def symmetric_log(x, C):
+    return np.sign(x) * np.log1p(np.abs(x) + C)
+
+# Inverse of the symmetric log
+def inverse_symmetric_log(y, C):
+    return np.sign(y)*(np.exp(np.sign(y)*y) - C - 1)
+
+class MappableDataset(Dataset):
+    def __init__(self, features, target):
+        self.features = features
+        self.target = target
+
+    def __len__(self):
+        return len(self.target)
+
+    def __getitem__(self, idx):
+        return torch.tensor(self.features[idx], dtype=torch.float32), torch.tensor(self.target[idx], dtype=torch.float32)
+
+class EKE_Dataset(MappableDataset):
+    def __init__(self, file_path, transform=True):
+        self.ds = xr.open_dataset(file_path)
+        self.C = self.compute_C() # TODO: Check to see if we should be dynamically changing this
+
+        # Extract features & target, flattening them to 1D vectors
+        features = np.stack([
+            # using log1p to handle extermely small values that are close to 0
+            np.log1p(self.ds['KE_vert_sum'].values.flatten()),  # Log transform
+            symmetric_log(self.ds['RV_vert_avg'].values.flatten(), self.C),  # Symmetric Log
+            np.log1p(self.ds['slope_vert_avg'].values.flatten()),  # Log transform
+            self.ds['Rd_dx_scaled'].values.flatten()  # No log, just normalize later
+        ], axis=1)
+
+        target = np.log1p(self.ds['EKE'].values.flatten())  # Log transform target
+
+        # **Filter out samples where ln(EKE) < 0**
+        valid_indices = target > 0
+        super().__init__(features[valid_indices], target[valid_indices])
+
+        # Compute mean & std for standardization (across dataset)
+        self.mean = self.features.mean(axis=0)
+        self.std = self.features.std(axis=0)
+
+        self.transform = transform
+        if transform:
+            self.features = (self.features - self.mean) / self.std
+
+    def __len__(self):
+        return len(self.target)
+
+    # Undo the transofrm
+    def inverse_transform(self, X):
+        if self.transform:
+            Y = X*self.std + self.mean
+            Y[:,0] = np.expm1(Y[:,0])
+            Y[:,1] = inverse_symmetric_log(Y[:,1], self.C)
+            Y[:,2] = np.expm1(Y[:,2])
+            return Y
+        return X
+
+    # Function to compute C dynamically based on the smallest nonzero absolute value in RV_vert_avg
+    def compute_C(self):
+        rv_vert_avg = self.ds['RV_vert_avg'].values.flatten()
+        nonzero_values = np.abs(rv_vert_avg[rv_vert_avg != 0])
+        C = np.min(nonzero_values) if len(nonzero_values) > 0 else 1.0  # Avoid zero
+        return np.log(C + 1)
+
+    # Return a truncated dataset by deliberating excluding a cluster of data
+    # Default is the most positive relative vorticity
+    def truncate(self, feature_idx=1):
+        clusters = KMeans(n_clusters=6, random_state=0).fit(self.features)
+        centers_dimensional = self.inverse_transform(clusters.cluster_centers_)
+        excluded_cluster = np.argmax(centers_dimensional[:,feature_idx])
+        retained_idx = clusters.labels_ != excluded_cluster
+        return MappableDataset(self.features[retained_idx], self.target[retained_idx])
+
 
 # ResNet-style Neural Network with Skip Connections
 class ResidualBlock(nn.Module):
@@ -184,6 +282,35 @@ def train_model(train_loader, val_loader, num_epochs=1000, lr=1e-3, weight_decay
 
         print(f"Epoch {epoch+1}: Train Loss: {total_loss/len(train_loader):.4f}, Val Loss: {val_loss/len(val_loader):.4f}")
 
+        if val_loss/len(val_loader) < 0.4:
+            metawriter.log_metric("training_metrics", 
+                   {"train_loss": str(f"{total_loss/len(train_loader):.4f}"),
+                    "train_epoch": str(epoch)}
+                ) 
+        
+            metawriter.log_metric("Validation_metrics", 
+                    {"val_loss": str(f"{val_loss/len(val_loader):.4f}"),
+                        "train_epoch": str(epoch)}
+                    ) 
+            
+            metawriter.log_execution_metrics(
+                "metrics", {"Epoch": str(epoch)}
+            )
+            return model
+        
+        metawriter.log_metric("training_metrics", 
+                   {"train_loss": str(f"{total_loss/len(train_loader):.4f}"),
+                    "train_epoch": str(epoch)}
+                ) 
+        
+        metawriter.log_metric("Validation_metrics", 
+                   {"val_loss": str(f"{val_loss/len(val_loader):.4f}"),
+                    "train_epoch": str(epoch)}
+                ) 
+        
+    metawriter.log_execution_metrics(
+            "metrics", {"Epoch": str(epoch)}
+        )
     return model
 
 # Test Function
@@ -203,6 +330,9 @@ def test_model(model, test_loader):
             test_loss += loss.item()
 
     print(f"Test Loss: {test_loss / len(test_loader):.4f}")
+    metawriter.log_execution_metrics(
+            "Test_metrics", {"Test Loss": str(f"{test_loss / len(test_loader):.4f}")}
+        )
 
 
 # Load Data
@@ -215,13 +345,34 @@ print(f"Dataset size before filtering: {len(dataset)}")
 print(f"Min ln(EKE): {np.min(dataset.target)}, Max ln(EKE): {np.max(dataset.target)}")
 print(f"Mean ln(EKE): {np.mean(dataset.target)}, Std ln(EKE): {np.std(dataset.target)}")
 
-# Train/Test Split
+# Train/Test Split 
+
+# For large dataset uncomment below and comment out the small dataset section
+'''
 train_size = int(0.8 * len(dataset))
 val_size = int(0.1 * len(dataset))
 test_size = len(dataset) - train_size - val_size
 #print(len(dataset))
+
 train_dataset, val_dataset, test_dataset = random_split(
     dataset.truncate(),
+    [train_size, val_size, test_size]
+)
+
+train_dataset, val_dataset, test_dataset = random_split(dataset, [train_size, val_size, test_size])
+'''
+
+# For smaller dataset
+truncated_dataset = dataset.truncate()
+dataset_size = len(truncated_dataset)
+
+# Compute sizes
+train_size = int(0.8 * dataset_size)
+val_size = int(0.1 * dataset_size)
+test_size = dataset_size - train_size - val_size  # Ensure exact match
+
+train_dataset, val_dataset, test_dataset = random_split(
+    truncated_dataset,
     [train_size, val_size, test_size]
 )
 
@@ -232,7 +383,14 @@ test_loader = DataLoader(test_dataset, batch_size=1024, shuffle=False)
 
 # Train and Save Model
 model = train_model(train_loader, val_loader)
-torch.save(model.state_dict(), "ekeresnet_model.pth")
+metawriter.commit_metrics("training_metrics")
+metawriter.commit_metrics("Validation_metrics")
+
+torch.save(model.state_dict(), "EKEResNet_model_Smalldataset.pth")
 
 # Run Test
 test_model(model, test_loader)
+metawriter.log_model(
+            path="EKEResNet_model_Smalldataset.pth", event="output", model_framework="pytorch", model_type="Resnet Conv", 
+            model_name="EKEResNet_model_Smalldataset.pth" 
+            )

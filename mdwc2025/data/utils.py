@@ -19,50 +19,65 @@ class MappableDataset(Dataset):
         return torch.tensor(self.features[idx], dtype=torch.float32), torch.tensor(self.target[idx], dtype=torch.float32)
 
 class EKE_Dataset(MappableDataset):
-    def __init__(self, file_path, transform=True):
-        self.ds = xr.open_dataset(file_path)
-        self.C = self.compute_C() # TODO: Check to see if we should be dynamically changing this
+    def __init__(self, file_path, do_normalization=True):
+        self.do_normalization = do_normalization
 
+        ds = xr.open_dataset(file_path)
+        # TODO: Check to see if we should be dynamically changing this
+        self.C = self._compute_C(ds.RV_vert_avg.values.flatten())
+
+        vars = ["KE_vert_sum", "RV_vert_avg", "slope_vert_avg", "Rd_dx_scaled"]
         # Extract features & target, flattening them to 1D vectors
-        features = np.stack([
-            # using log1p to handle extermely small values that are close to 0
-            np.log1p(self.ds['KE_vert_sum'].values.flatten()),  # Log transform
-            symmetric_log(self.ds['RV_vert_avg'].values.flatten(), self.C),  # Symmetric Log
-            np.log1p(self.ds['slope_vert_avg'].values.flatten()),  # Log transform
-            self.ds['Rd_dx_scaled'].values.flatten()  # No log, just normalize later
-        ], axis=1)
-
-        target = np.log1p(self.ds['EKE'].values.flatten())  # Log transform target
+        features = np.stack(
+            [ds[var].values.flatten() for var in vars],
+            axis=1
+        )
+        target = np.log1p(ds['EKE'].values.flatten())  # Log transform target
 
         # **Filter out samples where ln(EKE) < 0**
         valid_indices = target > 0
-        super().__init__(features[valid_indices], target[valid_indices])
+        super().__init__(features[valid_indices,:], target[valid_indices])
 
         # Compute mean & std for standardization (across dataset)
         self.mean = self.features.mean(axis=0)
         self.std = self.features.std(axis=0)
-
-        self.transform = transform
-        if transform:
-            self.features = (self.features - self.mean) / self.std
+        self.features = self.transform(self.features)
 
     def __len__(self):
         return len(self.target)
 
-    # Undo the transofrm
+    def normalize(self, X):
+        return (X - self.mean)/self.std
+
+    def inverse_normalize(self, X):
+        return X*self.std + self.mean
+
+    def transform(self, X):
+        Y = np.zeros_like(X)
+        Y[:,0] = np.log1p(X[:,0])
+        Y[:,1] = symmetric_log(X[:,1], self.C)  # Symmetric Log
+        Y[:,2] = np.log1p(X[:,2])
+        Y[:,3] = X[:,3]
+
+        if self.do_normalization:
+            Y = self.normalize(Y)
+        return Y
+
+    # Undo the transform
     def inverse_transform(self, X):
-        if self.transform:
-            Y = X*self.std + self.mean
-            Y[:,0] = np.expm1(Y[:,0])
-            Y[:,1] = inverse_symmetric_log(Y[:,1], self.C)
-            Y[:,2] = np.expm1(Y[:,2])
-            return Y
-        return X
+        if self.do_normalization:
+            Y = self.inverse_normalize(X)
+        else:
+            Y = X.copy()
+
+        Y[:,0] = np.expm1(Y[:,0])
+        Y[:,1] = inverse_symmetric_log(Y[:,1], self.C)
+        Y[:,2] = np.expm1(Y[:,2])
+        return Y
 
     # Function to compute C dynamically based on the smallest nonzero absolute value in RV_vert_avg
-    def compute_C(self):
-        rv_vert_avg = self.ds['RV_vert_avg'].values.flatten()
-        nonzero_values = np.abs(rv_vert_avg[rv_vert_avg != 0])
+    def _compute_C(self, RV):
+        nonzero_values = np.abs(RV[RV != 0])
         C = np.min(nonzero_values) if len(nonzero_values) > 0 else 1.0  # Avoid zero
         return np.log(C + 1)
 
@@ -73,5 +88,7 @@ class EKE_Dataset(MappableDataset):
         centers_dimensional = self.inverse_transform(clusters.cluster_centers_)
         excluded_cluster = np.argmax(centers_dimensional[:,feature_idx])
         retained_idx = clusters.labels_ != excluded_cluster
-        return MappableDataset(self.features[retained_idx], self.target[retained_idx])
-
+        truncated = MappableDataset(self.features[retained_idx], self.target[retained_idx])
+        truncated.clusters = clusters
+        truncated.excluded_cluster = excluded_cluster
+        return truncated

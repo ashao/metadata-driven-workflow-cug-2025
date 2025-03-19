@@ -1,6 +1,10 @@
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "metadata-driven-workflow-cug-2025"
+version = "0.0.1"
 dependencies = [
   "xarray[io]",
   "xgcm",
@@ -11,10 +15,6 @@ dependencies = [
   "smartredis",
   "cmf"
 ]
-
-[project]
-name = "metadata-driven-workflow-cug-2025"
-version = "0.0.1"
 
 [tool.setuptools]
 packages = ["mdwc2025"]

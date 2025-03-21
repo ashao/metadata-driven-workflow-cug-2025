@@ -88,7 +88,7 @@ class EKE_Dataset(MappableDataset):
         centers_dimensional = self.inverse_transform(clusters.cluster_centers_)
         excluded_cluster = np.argmax(centers_dimensional[:,feature_idx])
         retained_idx = clusters.labels_ != excluded_cluster
-        truncated = MappableDataset(self.features[retained_idx], self.target[retained_idx])
-        truncated.clusters = clusters
-        truncated.excluded_cluster = excluded_cluster
-        return truncated
+        self.features = self.features[retained_idx]
+        self.target = self.target[retained_idx]
+        self.clusters = clusters
+        self.excluded_cluster = excluded_cluster

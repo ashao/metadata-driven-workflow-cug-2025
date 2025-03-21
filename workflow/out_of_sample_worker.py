@@ -5,12 +5,13 @@ import numpy as np
 from smartredis import Client
 
 def concatenate_datasets(datasets):
-    KE_vert_sum = np.vstack([ds.KE_vert_sum for ds in datasets])
-    RV_vert_avg = np.vstack([ds.RV_vert_avg for ds in datasets])
-    slope_vert_avg = np.vstack([ds.slope_vert_avg for ds in datasets])
-    Rd_dx_scaled = np.vstack([ds.Rd_dx_scaled for ds in datasets])
-    EKE = np.hstack([ds.EKE for ds in datasets])
 
+    retrieve = lambda ds, name : ds.get_tensor(name).flatten()
+    KE_vert_sum = np.hstack([retrieve(ds, "KE_vert_sum") for ds in datasets])
+    RV_vert_avg = np.hstack([retrieve(ds, "RV_vert_avg") for ds in datasets])
+    slope_vert_avg = np.hstack([retrieve(ds, "slope_vert_avg") for ds in datasets])
+    Rd_dx_scaled = np.hstack([retrieve(ds, "Rd_dx_scaled") for ds in datasets])
+    EKE = np.hstack([retrieve(ds, "KE_vert_sum") for ds in datasets])
     return np.column_stack([KE_vert_sum, RV_vert_avg, slope_vert_avg, Rd_dx_scaled]), EKE
 
 def filter_zero_eke(features, target):
@@ -35,26 +36,28 @@ def main(args):
     new_target_l = []
 
     while True:
-        while client.get_dataset_list_length_gte(args.mom6_dataset_name, 100, 50, 10):
+        while client.poll_list_length_gte(args.mom6_dataset_name, 100, 50, 10):
             client.rename_list(args.mom6_dataset_name, "temp")
-            datasets = client.get_dataset_list("temp")
+            datasets = client.get_datasets_from_list("temp")
+            print(f"Number of new datasets: {len(datasets)}")
             features, target = concatenate_datasets(datasets)
             features, target = filter_zero_eke(features, target)
-            new_features, new_target = filter_in_sample(train_ds, target)
+            new_features, new_target = filter_in_sample(train_ds, features, target)
             if (n_new := len(new_target)) > 0:
                 num_new_samples += n_new
                 new_features_l.append(train_ds.transform(new_features))
                 new_target_l.append(np.log1p(new_target))
+                print(f"Number of new samples: {num_new_samples}")
 
         # Try one more time to get the list, if not, break the loop and complete
-        if not client.get_dataset_list_length_gte(args.mom6_dataset_name, 100, 50, 10):
+        if not client.poll_list_length_gte(args.mom6_dataset_name, 100, 50, 100):
             break
 
     train_ds.features = np.vstack([train_ds.features] + new_features_l)
     train_ds.target = np.vstack([train_ds.target] + new_target_l)
 
     with open(args.output_path, "wb") as f:
-        pickle.save(train_ds, f)
+        pickle.dump(train_ds, f)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -63,4 +66,5 @@ if __name__ == "__main__":
     parser.add_argument("mom6_dataset_name", help="The name of the dataset streamed from MOM6")
 
     args = parser.parse_args()
+    print(args)
     main(args)

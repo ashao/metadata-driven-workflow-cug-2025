@@ -11,10 +11,9 @@ TRAINING_DATA = DATAPATH / "training_data.pkl"
 OUTPUT_CLUSTER = DATAPATH / "clusters.pkl"
 ds = EKE_Dataset(SIMULATION_DATA)
 
-truncated_ds = ds.truncate()
+ds.truncate()
 with open(TRAINING_DATA, "wb") as f:
-  pickle.dump(truncated_ds, f)
+  pickle.dump(ds, f)
 
-
-labels = truncated_ds.clusters.predict(truncated_ds.features)
-print(f"Samples in excluded cluster: {np.sum(labels == truncated_ds.excluded_cluster)}")
+labels = ds.clusters.predict(ds.features)
+print(f"Samples in excluded cluster: {np.sum(labels == ds.excluded_cluster)}")

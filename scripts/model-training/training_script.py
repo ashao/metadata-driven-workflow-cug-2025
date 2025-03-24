@@ -157,10 +157,15 @@ def test_model(model, test_loader, metawriter):
 
 
 def main(model_arch, datapath, use_full_dataset, test_small=False):
-
     suffix = "full_dataset" if use_full_dataset else "small_dataset"
     metawriter = cmf_init(pipeline_name=model_arch + suffix)
     # Load Data
+
+    metawriter.log_dataset(
+        datapath, 
+        "input", 
+        custom_properties = {"name": str(suffix) + "_simulated"}
+        )
     dataset = EKE_Dataset(datapath)
     if test_small:
         dataset = torch.utils.data.Subset(

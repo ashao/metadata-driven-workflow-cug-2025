@@ -1,5 +1,5 @@
 import random
-from itertools import permutations
+from itertools import permutations, product
 
 import numpy as np
 import torch
@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader, random_split
 
 def cmf_init(pipeline_name="EKEResnet_SmallData"):
     metawriter = cmf.Cmf(
-        filename="CUG2025_mlmd", pipeline_name=pipeline_name, graph=False
+        filepath="CUG2025_mlmd", pipeline_name=pipeline_name, graph=False
     )
 
     context = metawriter.create_context(
@@ -34,7 +34,7 @@ def train_model(
     model_arch,
     val_loader,
     metawriter,
-    num_epochs=1000,
+    num_epochs=800,
     lr=1e-3,
     weight_decay=1e-6,
 ):
@@ -46,9 +46,16 @@ def train_model(
     optimizer = optim.SGD(
         model.parameters(), lr=lr, momentum=0.9, weight_decay=weight_decay
     )
-    ## @Rishabh: shouldn't steps_per_epoch  actually be the len(train_loader) below?
+
+    # Initial dummy train_loader to estimate steps_per_epoch
+    dummy_subset = torch.utils.data.Subset(train_dataset, random.sample(range(train_size), subset_size))
+    dummy_loader = DataLoader(dummy_subset, batch_size=1024, shuffle=True)
+
+    steps_per_epoch = len(dummy_loader)
+
+    ## @Rishabh: shouldn't steps_per_epoch  actually be the len(train_loader) below? Fixed
     scheduler = lr_scheduler.OneCycleLR(
-        optimizer, max_lr=5e-3, steps_per_epoch=len(train_loader), epochs=100
+        optimizer, max_lr=5e-3, steps_per_epoch=len(dummy_loader), epochs=100
     )
     # criterion = nn.SmoothL1Loss(beta=0.1)
     criterion = nn.MSELoss()
@@ -152,7 +159,7 @@ def test_model(model, test_loader, metawriter):
 def main(model_arch, datapath, use_full_dataset, test_small=False):
 
     suffix = "full_dataset" if use_full_dataset else "small_dataset"
-    metawriter = cmf_init(pipeline_name=model_name + suffix)
+    metawriter = cmf_init(pipeline_name=model_arch + suffix)
     # Load Data
     dataset = EKE_Dataset(datapath)
     if test_small:
@@ -185,16 +192,16 @@ def main(model_arch, datapath, use_full_dataset, test_small=False):
     test_loader = DataLoader(test_dataset, batch_size=1024, shuffle=False)
 
     # Train and Save Model
-    model = train_model(train_dataset, model_arch, train_loader, val_loader, metawriter)
+    model = train_model(train_dataset, model_arch, val_loader, metawriter)
     metawriter.commit_metrics("training_metrics")
     metawriter.commit_metrics("Validation_metrics")
 
-    model_label = "_".join([model_name, "model", suffix])
+    model_label = "_".join([model_arch, "model", suffix])
     model_path = model_label + ".pth"
     torch.save(model.state_dict(), model_path)
 
     # Run Test
-    test_model(model, test_loader)
+    test_model(model, test_loader, metawriter=metawriter)
     metawriter.log_model(
         path=model_path,
         event="output",
@@ -205,9 +212,9 @@ def main(model_arch, datapath, use_full_dataset, test_small=False):
 
 
 if __name__ == "__main__":
-    DATAPATH = "/lustre/data/shao/cug_2024/"
+    DATAPATH = "/lustre/data/shao/cug_2024/featurized.nc"
     model_archs = ["EKEResNet", "EKEBottleneckResNet"]
-    all_perm = permutations(model_archs, [True, False])
+    all_perm = product(model_archs, [True, False])
 
     for arch, use_full_dataset in all_perm:
         main(arch, DATAPATH, use_full_dataset, test_small=False)

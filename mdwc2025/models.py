@@ -47,7 +47,7 @@ class BottleneckResidualBlock(nn.Module):
 # Modified EKE_ResNet with Extra Linear Layers
 class EKEResNet(nn.Module):
     def __init__(self, input_dim=4):
-        super(EKE_ResNet, self).__init__()
+        super(EKEResNet, self).__init__()
         self.fc1 = nn.Linear(input_dim, 64)
         self.bn1 = nn.BatchNorm1d(64)
         self.res_block1 = ResidualBlock(64)
@@ -79,7 +79,7 @@ class EKEResNet(nn.Module):
 # CNN-based EKEResNet with Extra Linear Layers
 class EKEBottleneckResNet(nn.Module):
     def __init__(self):
-        super(EKEResNet, self).__init__()
+        super(EKEBottleneckResNet, self).__init__()
 
         self.transposed_conv1 = nn.ConvTranspose2d(1, 32, kernel_size=(3, 3), stride=2, padding=1, output_padding=1)
         self.bn1 = nn.BatchNorm2d(32)

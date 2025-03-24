@@ -10,7 +10,7 @@ dependencies = [
   "xgcm",
   "gcm_filters",
   "scikit-learn",
-  "torch",
+  "torch==1.11.0",
   "smartsim",
   "smartredis",
   "cmf"

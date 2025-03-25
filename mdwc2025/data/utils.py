@@ -2,6 +2,8 @@ import numpy as np
 import torch
 import xarray as xr
 
+from collections.abc import Iterable
+
 from sklearn.cluster import KMeans
 from torch.utils.data import Dataset
 
@@ -19,6 +21,10 @@ class MappableDataset(Dataset):
         return torch.tensor(self.features[idx], dtype=torch.float32), torch.tensor(self.target[idx], dtype=torch.float32)
 
 class EKE_Dataset(MappableDataset):
+    mean = None
+    std = None
+    C = None
+    vars = None
     def __init__(self, file_path, do_normalization=True):
         self.do_normalization = do_normalization
 
@@ -26,25 +32,35 @@ class EKE_Dataset(MappableDataset):
         # TODO: Check to see if we should be dynamically changing this
         self.C = self._compute_C(ds.RV_vert_avg.values.flatten())
 
-        vars = ["KE_vert_sum", "RV_vert_avg", "slope_vert_avg", "Rd_dx_scaled"]
+        self.vars = ["KE_vert_sum", "RV_vert_avg", "slope_vert_avg", "Rd_dx_scaled"]
         # Extract features & target, flattening them to 1D vectors
         features = np.stack(
-            [ds[var].values.flatten() for var in vars],
+            [ds[var].values.flatten() for var in self.vars],
             axis=1
         )
+        # Compute mean & std for standardization (across dataset)
+        self.mean = features.mean(axis=0)
+        self.std = features.std(axis=0)
+
+        features = self.transform(features)
         target = np.log1p(ds['EKE'].values.flatten())  # Log transform target
 
         # **Filter out samples where ln(EKE) < 0**
         valid_indices = target > 0
         super().__init__(features[valid_indices,:], target[valid_indices])
 
-        # Compute mean & std for standardization (across dataset)
-        self.mean = self.features.mean(axis=0)
-        self.std = self.features.std(axis=0)
-        self.features = self.transform(self.features)
-
     def __len__(self):
         return len(self.target)
+
+    def reset_from_dataset(self, ds):
+        features = np.stack(
+            [ds[var].values.flatten() for var in self.vars],
+            axis=1
+        )
+        target = np.log1p(ds['EKE'].values.flatten())  # Log transform target
+        valid_indices = target > 0
+        self.features = self.transform(features[valid_indices,:])
+        self.target = target[valid_indices]
 
     def normalize(self, X):
         return (X - self.mean)/self.std

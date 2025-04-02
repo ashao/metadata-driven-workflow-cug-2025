@@ -1,3 +1,4 @@
+import copy
 import numpy as np
 import torch
 import xarray as xr
@@ -19,6 +20,16 @@ class MappableDataset(Dataset):
 
     def __getitem__(self, idx):
         return torch.tensor(self.features[idx], dtype=torch.float32), torch.tensor(self.target[idx], dtype=torch.float32)
+
+    def copy_and_modify(self, features, target):
+        new_ds = copy.copy(self)
+        new_ds.features = features
+        new_ds.target = target
+        return new_ds
+
+    def append(self, features, target):
+        self.features = np.vstack([self.features, features])
+        self.target = np.append(self.target, target)
 
 class EKE_Dataset(MappableDataset):
     mean = None
@@ -103,8 +114,16 @@ class EKE_Dataset(MappableDataset):
         clusters = KMeans(n_clusters=6, random_state=0).fit(self.features)
         centers_dimensional = self.inverse_transform(clusters.cluster_centers_)
         excluded_cluster = np.argmax(centers_dimensional[:,feature_idx])
-        retained_idx = clusters.labels_ != excluded_cluster
-        self.features = self.features[retained_idx]
-        self.target = self.target[retained_idx]
         self.clusters = clusters
         self.excluded_cluster = excluded_cluster
+
+        excluded_idx = clusters.labels_ == excluded_cluster
+        excluded_ds = self.copy_and_modify(
+            self.features[excluded_idx,:], self.target[excluded_idx]
+        )
+
+        truncated_idx = clusters.labels_ != excluded_cluster
+        truncated_ds = self.copy_and_modify(
+            self.features[truncated_idx,:], self.target[truncated_idx]
+        )
+        return truncated_ds, excluded_ds

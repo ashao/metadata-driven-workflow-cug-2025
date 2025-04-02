@@ -1,0 +1,117 @@
+import argparse
+import pickle
+
+import numpy as np
+import torch
+
+from pathlib import Path
+
+from cmflib import cmf
+from mdwc2025 import models
+from mdwc2025.training import test_model, train_model
+from torch.utils.data import DataLoader, random_split
+
+WEIGHT_PATH = Path("/lustre/data/shao/cug_2025/pretrained_models")
+
+def cmf_init(pipeline_stage, mlmd_file):
+    metawriter = cmf.Cmf(
+        filepath=mlmd_file, pipeline_name="CMF-SmartSim-CUG2025", graph=False
+    )
+
+    context = metawriter.create_context(
+        pipeline_stage=pipeline_stage, custom_properties={"name": "CUG_2025"}
+    )
+
+    execution = metawriter.create_execution(
+        execution_type="Model_Training", custom_properties={"dataset": "SimulatedData"}
+    )
+    return metawriter
+
+
+def main(args):
+
+    metawriter = cmf_init(f"{args.model_arch}_retrainer", args.mlmd_file)
+    # Open the base dataset
+    with open(args.base_data, "rb") as f:
+        dataset = pickle.load(f)
+    metawriter.log_dataset(args.base_data, "input")
+
+    # Read in all the extra data
+    for fname in args.extra_data:
+        metawriter.log_dataset(fname, "input")
+        with open(fname, "rb") as f:
+            extra_ds = pickle.load(f)
+            dataset.append(extra_ds.features, extra_ds.target)
+
+    metawriter = cmf_init(f"{args.model_arch}_retrain", args.mlmd_file)
+
+    # Train/Test Split
+    dataset_size = len(dataset)
+    train_size = int(0.8 * dataset_size)
+    val_size = int(0.1 * dataset_size)
+    test_size = dataset_size - train_size - val_size  # Ensure exact match
+
+    train_dataset, val_dataset, test_dataset = random_split(
+        dataset, [train_size, val_size, test_size]
+    )
+
+    # DataLoaders
+    val_loader = DataLoader(val_dataset, batch_size=1024, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=1024, shuffle=False)
+
+    # Train and Save Model
+    model = train_model(
+        train_dataset,
+        args.model_arch,
+        val_loader,
+        metawriter,
+        device_spec=args.device,
+        weights_file=WEIGHT_PATH / f"{args.model_arch}.pth"
+    )
+    metawriter.commit_metrics("training_metrics")
+    metawriter.commit_metrics("validation_metrics")
+
+    model_label = f"{args.model_arch}_retrained"
+    model_path = model_label + ".pth"
+    torch.save(model.state_dict(), model_path)
+
+    # JIT-trace the model for inference
+    model.eval()
+    module = torch.jit.trace(model, dataset.features[0, :])
+    torch.jit.save(module, f"{model_label}_jit.pt")
+
+    # Run Test
+    test_model(model, test_loader, metawriter)
+    metawriter.log_model(
+        path=model_path,
+        event="output",
+        model_framework="pytorch",
+        model_type="Resnet Conv",
+        model_name=model_label,
+    )
+
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "mlmd_file", help="Path to the cmf database file for metadata tracking"
+    )
+    parser.add_argument(
+        "model_arch",
+        help="The architecture of the ML model to train",
+        choices=["EKEResNet", "EKEBottleneckResNet"],
+    )
+    parser.add_argument(
+        "base_data", help="File (pickle) which contains the base dataset"
+    )
+    parser.add_argument(
+        "test_data", help="File (pickle) which contains the test dataset"
+    )
+    parser.add_argument(
+        "extra_data", help="Files (pickle) which contain additional data", nargs="+"
+    )
+    parser.add_argument("--device", help="The device to use for training")
+    args = parser.parse_args()
+    print(args)
+    main(args)

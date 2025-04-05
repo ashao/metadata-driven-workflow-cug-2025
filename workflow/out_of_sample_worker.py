@@ -35,6 +35,7 @@ def retrieve_datasets(client, dataset_list_name, nprocs):
         client.rename_list(dataset_list_name, "temp")
         datasets = client.get_datasets_from_list("temp")
 
+    print(datasets[0].get_name())
     # Get all unique timestamps
     timestamps = list(set(str_to_dt(ds) for ds in datasets))
 
@@ -113,20 +114,6 @@ def calculate_features(ds, grid_ds, mke_ds, filter_scale):
     return train_ds
 
 
-def filter_zero_eke(features, target):
-    nonzero = np.log1p(target) > 0
-    return features[nonzero, :], target[nonzero]
-
-
-def filter_in_sample(train_ds, features, target):
-    transformed_features = train_ds.transform(features)
-    labels = train_ds.clusters.predict(transformed_features)
-    new_samples = labels == train_ds.excluded_cluster
-    out_of_sample_features = features[new_samples, :]
-    out_of_sample_targets = target[new_samples]
-    return out_of_sample_features, out_of_sample_targets
-
-
 def main(args):
 
     if args.mlmd_path:
@@ -161,7 +148,9 @@ def main(args):
     iteration = 0
 
     while True:
-        while client.poll_list_length_gte(args.mom6_dataset_name, 100, 25, 10):
+
+        found = False
+        while client.poll_list_length_gte(args.mom6_dataset_name, int(args.nprocs), 50, 200):
             print(f"Rank datasets retrieved")
             iteration += 1
 
@@ -172,6 +161,7 @@ def main(args):
             # Create a new xarray dataset from streamed information
             coords = mke_ds.coords
             coords["Time"] = sorted(list(ds_by_time.keys()))
+            coords["Time"] = range(len(ds_by_time))
             new_ds = xr.Dataset(coords=coords)
             for var in ["slope_vert_avg", "KE_vert_sum", "Rd_dx_scaled", "RV_vert_avg"]:
                 new_ds[var] = (
@@ -179,9 +169,19 @@ def main(args):
                     reconstruct_global(ds_by_time, var, ni, nj),
                 )
             train_ds = calculate_features(new_ds, grid_ds, mke_ds, filter_scale)
+            train_ds["EKE"] = train_ds["EKE"].where(train_ds["EKE"]>0., 0.)
+            train_ds = train_ds.isel(yh=slice(20,-20))
             training_data.reset_from_dataset(train_ds)
+            clusters = training_data.clusters.predict(training_data.features)
+            retain = clusters == training_data.excluded_cluster
+            training_data.features = training_data.features[retain,:]
+            training_data.target = training_data.target[retain]
+            train_ds.to_netcdf(f"training_data_{iteration:03d}.nc")
 
-            outfile = args.output_path + f"training_data_{iteration:03d}.pkl"
+            timestamp = str(sorted(list(ds_by_time))[0]).replace(" ", "_")
+            out_path = Path(args.output_path)
+            out_path.mkdir(parents=True, exist_ok=True)
+            outfile = Path(args.output_path) / f"training_data_{timestamp}.pkl"
             print(f"New samples: {len(training_data)}")
             with open(outfile, "wb") as f:
                 pickle.dump(training_data, f)
@@ -193,9 +193,10 @@ def main(args):
                 )
                 metawriter.log_dataset(str(Path(outfile).resolve()), "input")
             # TODO: Log this artifact with cmf OR do this as log_dataslice?
+            found = True
 
         # Try one more time to get the list, if not, break the loop and complete
-        if not client.poll_list_length_gte(args.mom6_dataset_name, 100, 10, 10):
+        if (not client.poll_list_length_gte(args.mom6_dataset_name, 100, 10, 10)) and (not found):
             break
 
 

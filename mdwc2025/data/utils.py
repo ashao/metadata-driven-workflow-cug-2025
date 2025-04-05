@@ -1,5 +1,6 @@
 import copy
 import numpy as np
+import pandas as pd
 import torch
 import xarray as xr
 
@@ -40,24 +41,30 @@ class EKE_Dataset(MappableDataset):
         self.do_normalization = do_normalization
 
         ds = xr.open_dataset(file_path)
-        # TODO: Check to see if we should be dynamically changing this
-        self.C = self._compute_C(ds.RV_vert_avg.values.flatten())
+
+
+
 
         self.vars = ["KE_vert_sum", "RV_vert_avg", "slope_vert_avg", "Rd_dx_scaled"]
         # Extract features & target, flattening them to 1D vectors
         features = np.stack(
-            [ds[var].values.flatten() for var in self.vars],
+            [ds[var].to_numpy().flatten() for var in self.vars],
             axis=1
         )
+        target = np.log1p(ds['EKE'].to_numpy().flatten())  # Log transform target
+        not_nan_indices = ~np.isnan(features).any(axis=1)
+        not_nan_indices = ~np.isnan(target) & not_nan_indices
+        features = features[not_nan_indices,:]
+        target = target[not_nan_indices]
+
+        self.C = self._compute_C(features[:,1].flatten())
         # Compute mean & std for standardization (across dataset)
         self.mean = features.mean(axis=0)
         self.std = features.std(axis=0)
 
         features = self.transform(features)
-        target = np.log1p(ds['EKE'].values.flatten())  # Log transform target
-
         # **Filter out samples where ln(EKE) < 0**
-        valid_indices = target > 0
+        valid_indices = (target > 0) & (~np.isnan(target))
         super().__init__(features[valid_indices,:], target[valid_indices])
 
     def __len__(self):

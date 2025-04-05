@@ -4,6 +4,7 @@
 #override NJGLOBAL = ;NJGLOBAL;
 #override DT = ;DT;
 #override DT_THERM = ;DT_THERM;
+#override KHTH = ;KHTH;
 
 
 #override USE_MEKE = True
@@ -12,3 +13,8 @@
 #override EKE_SOURCE = "dbclient"
 #override MEKE_TRAINING = ;MEKE_TRAINING;
 #override MEKE_COLD_START = False
+#override USE_VARIABLE_MIXING = True
+#override MEKE_KHCOEFF = ;MEKE_KHCOEFF;
+EKE_SET_MODEL = False
+EKE_MODEL_KEY = "mleke"
+MEKE_IN_DYNAMICS = False

@@ -105,7 +105,7 @@ def calculate_features(ds, grid_ds, mke_ds, filter_scale):
     )
     # Calculate EKE
     train_ds["EKE"] = ds["KE_vert_sum"] - mke_ds["KE_vert_sum"]
-    train_ds["Rd_dx_scaled"] = ds["Rd_dx_scaled"] * grid_length / filter_scale
+    train_ds["Rd_dx_scaled"] = ds["Rd_dx_scaled"] * (grid_length / filter_scale)
 
     # Coarse-grain all the other variables
     for var in ["KE_vert_sum", "RV_vert_avg", "slope_vert_avg"]:
@@ -116,11 +116,15 @@ def calculate_features(ds, grid_ds, mke_ds, filter_scale):
 
 def main(args):
 
-    if args.mlmd_path:
-        metawriter = cmf.Cmf(
-            args.mlmd_path, pipeline_name="CMF-SmartSim-2025", graph=False
-        )
-        metawriter.create_context(pipeline_stage="Data-generation")
+    metawriter = cmf.Cmf(
+        args.mlmd_path, pipeline_name="CMF-SmartSim-2025", graph=True
+    )
+    metawriter.create_context(pipeline_stage="Data generation")
+    metawriter.create_execution("Data sampler")
+    metawriter.log_dataset(f"{args.mom6_path}/MOM_override", "input")
+    metawriter.log_dataset(f"{args.mom6_path}/INPUT/MOM.res.nc", "input")
+    metawriter.log_dataset(f"{args.mom6_path}/INPUT/ocean_solo.res", "input")
+
 
     filter_scale = int(args.filter_scale) * 1.0e3  # Convert to meters
     # Load all data needed for this worker
@@ -150,7 +154,7 @@ def main(args):
     while True:
 
         found = False
-        while client.poll_list_length_gte(args.mom6_dataset_name, int(args.nprocs), 50, 200):
+        while client.poll_list_length_gte(args.mom6_dataset_name, int(args.nprocs), 50, 500):
             print(f"Rank datasets retrieved")
             iteration += 1
 
@@ -191,18 +195,18 @@ def main(args):
                 metawriter.log_metric(
                     "sampler_metrics", {"n_new_points": str(len(training_data))}
                 )
-                metawriter.log_dataset(str(Path(outfile).resolve()), "input")
-            # TODO: Log this artifact with cmf OR do this as log_dataslice?
+                metawriter.log_dataset(str(Path(outfile).resolve()), "output")
             found = True
 
         # Try one more time to get the list, if not, break the loop and complete
-        if (not client.poll_list_length_gte(args.mom6_dataset_name, 100, 10, 10)) and (not found):
+        if (not client.poll_list_length_gte(args.mom6_dataset_name, 100, 10, 50)) and (not found):
             break
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("training_data", help="Path to the training data")
+    parser.add_argument("mom6_path", help="Path to MOM6 run directory")
     parser.add_argument("output_path", help="Where to store the sample data")
     parser.add_argument(
         "mom6_dataset_name", help="The name of the dataset streamed from MOM6"
@@ -218,5 +222,4 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    print(args)
     main(args)

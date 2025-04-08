@@ -34,6 +34,7 @@ def train_model(
     device = torch.device(device_spec)
     model = getattr(models, model_arch)().to(device)
     if weights_file:
+        metawriter.log_model(str(weights_file), event="input")
         model.load_state_dict(torch.load(weights_file, weights_only=True))
 
     optimizer = optim.SGD(
@@ -44,7 +45,6 @@ def train_model(
     dummy_subset = torch.utils.data.Subset(train_dataset, random.sample(range(train_size), subset_size))
     dummy_loader = DataLoader(dummy_subset, batch_size=batch_size, shuffle=True)
 
-    ## @Rishabh: shouldn't steps_per_epoch  actually be the len(train_loader) below? Fixed
     scheduler = lr_scheduler.OneCycleLR(
         optimizer, max_lr=5e-3, steps_per_epoch=len(dummy_loader), epochs=100
     )
@@ -133,5 +133,4 @@ def test_model(model, test_loader, metawriter):
         "test_metrics", {"Test Loss": str(f"{test_loss / len(test_loader):.4f}")}
     )
     return test_loss
-    # metawriter.commit_metrics("test_metrics")
 

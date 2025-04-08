@@ -6,7 +6,7 @@ from cmflib import cmf, cmfquery
 import numpy as np
 from smartsim import Experiment
 
-DAYMAX = 2200
+DAYMAX = 2195
 DAYMAX_LOW = 1096
 MOM6_NPROCS = 24
 DATAPATH = Path("/lustre/data/shao/cug_2025/")
@@ -28,19 +28,21 @@ def clean_cmf():
         f.unlink()
 
 
-def log_mom6_inputs(run_path, metawriter):
+def log_high_res_mom6_inputs(run_path, metawriter):
+    metawriter.create_context(pipeline_stage="Data Generation")
+    metawriter.create_execution("Phillips-High")
     metawriter.log_dataset(f"{run_path}/MOM_override", "input")
     metawriter.log_dataset(f"{run_path}/INPUT/MOM.res.nc", "input")
     metawriter.log_dataset(f"{run_path}/INPUT/ocean_solo.res", "input")
 
-
-def create_sampler(exp):
+def create_sampler(exp, mom6_run_path):
     # Configure the data sampler
     rs_sampler = exp.create_run_settings(
         "python",
         exe_args=[
             "out_of_sample_worker.py",
             str(BASE_TRAINING_DATA),
+            mom6_run_path,
             f"{exp.exp_path}/archive/data_sampler",
             "MEKE_training_data",
             "/lustre/data/shao/cug_2024/model_data/MKE.nc",
@@ -129,6 +131,14 @@ def create_mom6_low_res(exp, model_path):
     )
     return mom6_low_res
 
+def log_low_res_mom6_inputs(run_path, model_path, metawriter):
+    metawriter.create_context(pipeline_stage="Model Deployment")
+    metawriter.create_execution("Phillips-Low-ML-EKE")
+    metawriter.log_dataset(f"{run_path}/MOM_override", "input")
+    metawriter.log_dataset(f"{run_path}/INPUT/MOM.res.nc", "input")
+    metawriter.log_dataset(f"{run_path}/INPUT/ocean_solo.res", "input")
+    metawriter.log_model(model_path, "input")
+
 def archive_retrainer(exp, retrainer):
     archive_path = Path(exp.exp_path) / "archive" / retrainer.name
     archive_path.mkdir(parents=True, exist_ok=True)
@@ -136,11 +146,13 @@ def archive_retrainer(exp, retrainer):
     for f in files:
         shutil.copyfile(f, archive_path)
 
-def archive_mom6(exp, mom6):
+def archive_mom6(exp, mom6, metawriter):
     archive_path = Path(exp.exp_path) / "archive" / "high_res" / "INPUT"
     archive_path.mkdir(parents=True, exist_ok=True)
-    shutil.copy(f"{mom6.path}/RESTART/MOM.res.nc", archive_path)
-    shutil.copy(f"{mom6.path}/RESTART/ocean_solo.res", archive_path)
+    outputs = [f"{mom6.path}/RESTART/MOM.res.nc", f"{mom6.path}/RESTART/ocean_solo.res"]
+    for f in outputs:
+        metawriter.log_dataset(f, event="output")
+        shutil.copy(f, archive_path)
 
 def retrieve_best_model(query):
     models = query.store.get_artifacts_by_type("Model")
@@ -164,23 +176,22 @@ def main():
     # TODO: Enable neo4j to ensure consistency between workflow artifacts as inputs/outputs
     # TODO: Reuse exection in the C-interface
     cmf.cmf_init(
-        type="local",
-        path="./",
-        git_remote_url="git@github.com:user/repo.git",
-    )
+            type="local",
+            path="./",
+            git_remote_url="git@github.com:user/repo.git",
+            neo4j_user = 'neo4j',
+            neo4j_password = 'test1234',
+            neo4j_uri = 'bolt://localhost:7687'
+        )
+
     metawriter = cmf.Cmf(
-        filepath=MLMD_FILE, pipeline_name="CMF-SmartSim-2025", graph=False
+        filepath=MLMD_FILE, pipeline_name="CMF-SmartSim-2025", graph=True
     )
 
-    exp = Experiment("CMF-SmartSim-CUG2025", launcher="local")
-
-    # TODO: Add custom_properties to each context/execution to define
-    # configuration parameters
-    metawriter.create_context(pipeline_stage="Data-generation")
-    metawriter.create_execution("Simulation")
+    exp = Experiment("CMF-SmartSim-2025", launcher="local")
 
     # Create and configure the database
-    db = exp.create_database(interface="lo")
+    db = exp.create_database(interface="lo", port=8521)
 
     # Generate new training data
     min_train_loss = np.inf
@@ -190,19 +201,17 @@ def main():
         exp.start(db)
 
         while min_train_loss > 1.:
-            # Create the sampler
-            sampler = create_sampler(exp)
-
             mom6_high_res = create_mom6_high_res(exp, high_res_restart, daymax)
+            sampler = create_sampler(exp, mom6_high_res.path)
             daymax += 5
 
             # Generate the run directory for the high res model
             exp.generate(mom6_high_res, sampler, overwrite=True)
-            log_mom6_inputs(mom6_high_res.path, metawriter)
+            log_high_res_mom6_inputs(mom6_high_res.path, metawriter)
 
             # while min_train_loss > 1.:
             exp.start(mom6_high_res, sampler, block=True)
-            archive_mom6(exp, mom6_high_res)
+            archive_mom6(exp, mom6_high_res, metawriter)
             high_res_restart = Path(exp.exp_path) / "archive" / "high_res" / "INPUT"
             retrainers = [
                 create_retrainer(exp, arch, f"cuda:{i}")
@@ -217,6 +226,7 @@ def main():
 
         mom6_low_res = create_mom6_low_res(exp, model_path)
         exp.generate(mom6_low_res, overwrite=True)
+        log_low_res_mom6_inputs(mom6_low_res.path, model_path, metawriter)
         exp.start(mom6_low_res)
     finally:
         exp.stop(db)

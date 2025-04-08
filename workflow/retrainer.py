@@ -13,24 +13,23 @@ from torch.utils.data import DataLoader, random_split
 
 WEIGHT_PATH = Path("/lustre/data/shao/cug_2025/pretrained_models")
 
-def cmf_init(pipeline_stage, mlmd_file):
+def cmf_init(execution_stage, mlmd_file):
     metawriter = cmf.Cmf(
-        filepath=mlmd_file, pipeline_name="CMF-SmartSim-CUG2025", graph=False
+        filepath=mlmd_file, pipeline_name="CMF-SmartSim-2025", graph=True
     )
 
-    context = metawriter.create_context(
-        pipeline_stage=pipeline_stage, custom_properties={"name": "CUG_2025"}
-    )
+    context = metawriter.create_context(pipeline_stage="Model Retraining")
 
-    execution = metawriter.create_execution(
-        execution_type="Model_Training", custom_properties={"dataset": "SimulatedData"}
-    )
+    execution = metawriter.create_execution(execution_stage)
     return metawriter
 
 
 def main(args):
 
     metawriter = cmf_init(f"{args.model_arch}_retrainer", args.mlmd_file)
+
+    # Log the input models
+
     # Open the base dataset
     print("Reading in base dataset")
     with open(args.base_data, "rb") as f:
@@ -50,13 +49,11 @@ def main(args):
     clusters = dataset.clusters.predict(dataset.features)
     for i in range(dataset.clusters.labels_.max()+1):
         cluster_indices = np.argwhere(clusters == i).squeeze()
-        idx.extend(np.random.choice(cluster_indices, 2000, replace=False))
+        idx.extend(np.random.choice(cluster_indices, 5000, replace=False))
     dataset.features = dataset.features[idx,:]
     dataset.target = dataset.target[idx]
     with open("training_dataset.pkl", "wb") as f:
         pickle.dump(dataset, f)
-
-    metawriter = cmf_init(f"{args.model_arch}_retrain", args.mlmd_file)
 
     # Sample evenly from all clusters
     # Train/Test Split
@@ -81,9 +78,10 @@ def main(args):
         metawriter,
         device_spec=args.device,
         weights_file=WEIGHT_PATH / f"{args.model_arch}.pth",
-        convergence_criterion=0.7,
+        convergence_criterion=0.5,
         batch_size=131072,
-        subset_data=False
+        subset_data=False,
+        num_epochs=100
     )
     metawriter.commit_metrics("training_metrics")
     metawriter.commit_metrics("validation_metrics")
@@ -104,13 +102,12 @@ def main(args):
         path=str(Path(jit_model_path).resolve()),
         event="output",
         model_framework="pytorch",
-        model_type="Resnet Conv",
+        model_type=args.model_arch,
         model_name=model_label,
         custom_properties={
             "test_loss": test_loss
         }
     )
-
 
 if __name__ == "__main__":
 

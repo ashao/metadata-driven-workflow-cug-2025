@@ -6,8 +6,13 @@
 #This is the field section of the diag_table.
 
 
+"ocean_model","h","h","training_data","all","none","none",2
 "ocean_model","KE","KE","training_data","all","none","none",2
 "ocean_model","Rd_dx","Rd_dx","training_data","all","none","none",2
 "ocean_model","RV","RV","training_data","all","none","none",2
 "ocean_model","e","e","training_data","all","none","none",2
 "ocean_model","MEKE","MEKE","training_data","all","none","none",2
+"ocean_model","MEKE_RV","MEKE_RV","training_data","all","none","none",2
+"ocean_model","MEKE_MKE","MEKE_MKE","training_data","all","none","none",2
+"ocean_model","MEKE_slope_z","MEKE_slope_z","training_data","all","none","none",2
+"ocean_model","MEKE_Rd_dx","MEKE_Rd_dx","training_data","all","none","none",2

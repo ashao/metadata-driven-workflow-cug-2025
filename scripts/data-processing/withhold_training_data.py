@@ -5,7 +5,7 @@ import numpy as np
 
 from mdwc2025.data.utils import EKE_Dataset
 
-DATAPATH = pathlib.Path("/lustre/data/shao/cug_2025/")
+DATAPATH = pathlib.Path("/lustre/data/shao/cug_2024/model_data")
 SIMULATION_DATA = DATAPATH / "featurized.nc"
 ds = EKE_Dataset(SIMULATION_DATA)
 
